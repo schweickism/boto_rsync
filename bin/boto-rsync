@@ -489,6 +489,21 @@ def main():
                     else:
                         key_name = cloud_path + get_key_name(root, path) + '/'
                     
+                    # Skip whole directory if matches exclude argument(s)
+                    # (Still checks subdirectories, but saves a little time and verbosity.)
+                    excludeDir = False
+                    for excludePath in exclude:
+                        if fnmatch(root+os.sep, excludePath):
+                            excludeDir = True
+                            break
+                    if excludeDir:
+                        if not quiet:
+                            sys.stdout.write(
+                                'Skipping %s (excluded path)\n' %
+                                root
+                            )
+                        continue
+                    
                     if ignore_empty and not files:
                         if not quiet:
                             sys.stdout.write(
@@ -550,17 +565,15 @@ def main():
                     # determine if the file should be excluded according to command line arguments.
                     excludeFile = False
                     for excludePath in exclude:
-                        if fullpath.startswith(excludePath):
+                        if fnmatch(fullpath, excludePath):
                             excludeFile = True
-                            continue
-                        elif fullpath[len(path):].lstrip(os.sep).startswith(excludePath):
-                            excludeFile = True
-                            continue
+                            break
                     if excludeFile:
-                        sys.stdout.write(
-                            'Skipping %s (excluded path)\n' %
-                            fullpath[len(path):].lstrip(os.sep)
-                        )
+                        if not quiet:
+                            sys.stdout.write(
+                                'Skipping %s (excluded path)\n' %
+                                fullpath[len(path):].lstrip(os.sep)
+                            )
                         continue
                     
                     if file_size == 0:
