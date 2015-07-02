@@ -24,6 +24,7 @@
 import sys, os, time, datetime, argparse, threading, signal
 from fnmatch import fnmatch
 import boto
+from boto.utils import parse_ts
 
 __version__ = '0.8.1'
 
@@ -276,6 +277,11 @@ def main():
              'trailing characters to specify directories.'
         )
     parser.add_argument(
+        '--size-only', action='store_true',
+        help='Only compare size of files in deciding what to transfer, ' + \
+             'ignoring last-modified.'
+        )
+    parser.add_argument(
         '--delete', action='store_true',
         help='Delete extraneous files from destination dirs after the ' + \
              'transfer has finished (e.g. rsync\'s --delete-after).'
@@ -330,6 +336,7 @@ def main():
         no_recurse = args.no_recurse or glob
         skip_dirkeys = args.skip_dirkeys
         ignore_empty = args.ignore_empty
+        size_only = args.size_only
         delete = args.delete
         no_op = args.no_op
         quiet = args.quiet
@@ -462,7 +469,7 @@ def main():
                     if glob and not fnmatch(key.name.split('/')[-1], glob):
                         continue
                     
-                    keys[key.name] = key.size
+                    keys[key.name] = {'size': key.size, 'modified': parse_ts(key.last_modified)}
             except Exception, e:
                 raise e
             finally:
@@ -523,7 +530,7 @@ def main():
                              key_name.endswith('_$folder$'):
                             if not quiet:
                                 sys.stdout.write(
-                                    'Skipping %s (size matches)\n' %
+                                    'Skipping %s (directory already exists)\n' %
                                     key_name.replace('_$folder$', '/')
                                     )
                             create_dirkey = False
@@ -549,7 +556,8 @@ def main():
                                     reduced_redundancy=reduced,
                                     encrypt_key=encrypt
                                     )
-                            keys[key_name] = 0
+                            keys[key_name]['size'] = 0
+                            keys[key_name]['modified'] = datetime.datetime.now()
                             
                             # Clean stdout
                             sys.stdout.write('\n')
@@ -593,13 +601,22 @@ def main():
                                     fullpath[len(path):].lstrip(os.sep)
                                     )
                             continue
-                        elif keys[key_name] == file_size:
-                            if not quiet:
-                                sys.stdout.write(
-                                    'Skipping %s (size matches)\n' %
-                                    fullpath[len(path):].lstrip(os.sep)
-                                    )
-                            continue
+                        elif keys[key_name]['size'] == file_size:
+                            if size_only:
+                                if not quiet:
+                                    sys.stdout.write(
+                                        'Skipping %s (size matches)\n' %
+                                        fullpath[len(path):].lstrip(os.sep)
+                                        )
+                                continue
+                            # Compare last modified
+                            elif datetime.datetime.fromtimestamp(os.path.getmtime(fullpath)) <= keys[key_name]['modified']:
+                                if not quiet:
+                                    sys.stdout.write(
+                                        'Skipping %s (not modified since last upload)\n' %
+                                        fullpath[len(path):].lstrip(os.sep)
+                                        )
+                                continue
                     
                     sys.stdout.write(
                         '%s\n' %
@@ -623,7 +640,8 @@ def main():
                                 policy=grant, reduced_redundancy=reduced,
                                 encrypt_key=encrypt
                                 )
-                        keys[key_name] = file_size
+                        keys[key_name]['size'] = file_size
+                        keys[key_name]['modified'] = datetime.datetime.now()
                         
                         # Clean stdout
                         sys.stdout.write('\n')
@@ -655,7 +673,7 @@ def main():
                         if key_name in keys:
                             del(keys[key_name])
                 
-                for key_name, key_size in keys.iteritems():
+                for key_name, key_meta in keys.iteritems():
                     sys.stdout.write(
                         'deleting %s\n' %
                         key_name[len(cloud_path):].replace('_$folder$', '/')
@@ -698,16 +716,23 @@ def main():
                             sys.stdout.write('Skipping %s (not overwriting)\n' %
                                              filename)
                 elif key.size == file_size:
-                    copy_file = False
-                    if not quiet:
-                        if filename != key_name.split('/')[-1]:
-                            sys.stdout.write(
-                                'Skipping %s -> %s (size matches)\n' %
-                                filename, key_name.split('/')[-1]
-                                )
-                        else:
-                            sys.stdout.write('Skipping %s (size matches)\n' %
-                                             filename)
+                    skip_reason = ''
+                    if size_only:
+                        skip_reason = 'size matches'
+                    # Compare last modified
+                    elif datetime.datetime.fromtimestamp(os.path.getmtime(path)) <= parse_ts(key.last_modified):
+                        skip_reason = 'not modified since last upload'
+                    if skip_reason != '':
+                        copy_file = False
+                        if not quiet:
+                            if filename != key_name.split('/')[-1]:
+                                sys.stdout.write(
+                                    'Skipping %s -> %s (%s)\n' %
+                                    (filename, key_name.split('/')[-1], skip_reason)
+                                    )
+                            else:
+                                sys.stdout.write('Skipping %s (%s)\n' %
+                                                 (filename, skip_reason))
             
             if copy_file:
                 if filename != key_name.split('/')[-1]:
@@ -801,19 +826,27 @@ def main():
                                 )
                     copy_file = False
                 elif key.size == os.path.getsize(fullpath):
-                    if not quiet:
-                        if rename:
-                            sys.stdout.write(
-                                'Skipping %s -> %s (size matches)\n' %
-                                keypath.replace('/', os.sep),
-                                fullpath.split(os.sep)[-1]
-                                )
-                        else:
-                            sys.stdout.write(
-                                'Skipping %s (size matches)\n' %
-                                fullpath.split(os.sep)[-1]
-                                )
-                    copy_file = False
+                    skip_reason = ''
+                    if size_only:
+                        skip_reason = 'size matches'
+                    # Compare last modified
+                    elif parse_ts(key.last_modified) < datetime.datetime.fromtimestamp(os.path.getmtime(fullpath)):
+                        skip_reason = 'local copy more recently modified'
+                    if skip_reason != '':
+                        if not quiet:
+                            if rename:
+                                sys.stdout.write(
+                                    'Skipping %s -> %s (%s)\n' %
+                                    (keypath.replace('/', os.sep),
+                                    fullpath.split(os.sep)[-1],
+                                    skip_reason)
+                                    )
+                            else:
+                                sys.stdout.write(
+                                    'Skipping %s (%s)\n' %
+                                    (fullpath.split(os.sep)[-1], skip_reason)
+                                    )
+                        copy_file = False
             
             if copy_file:
                 if rename:
@@ -890,12 +923,27 @@ def main():
                                 fullpath[len(os.path.join(path, '')):]
                                 )
                         continue
-                    elif key.size == os.path.getsize(fullpath) or \
-                         key.name.endswith('/') or \
+                    elif key.size == os.path.getsize(fullpath):
+                        if size_only:
+                            if not quiet:
+                                sys.stdout.write(
+                                    'Skipping %s (size matches)\n' %
+                                    fullpath[len(os.path.join(path, '')):]
+                                    )
+                            continue
+                        # Compare last modified
+                        elif parse_ts(key.last_modified) < datetime.datetime.fromtimestamp(os.path.getmtime(fullpath)):
+                            if not quiet:
+                                sys.stdout.write(
+                                    'Skipping %s (modified since last upload)\n' %
+                                    fullpath[len(path):].lstrip(os.sep)
+                                    )
+                            continue
+                    elif key.name.endswith('/') or \
                          key.name.endswith('_$folder$'):
                         if not quiet:
                             sys.stdout.write(
-                                'Skipping %s (size matches)\n' %
+                                'Skipping %s (directory already exists)\n' %
                                 fullpath[len(os.path.join(path, '')):]
                                 )
                         continue
@@ -1011,17 +1059,24 @@ def main():
                                 )
                     copy_file = False
                 elif key.size == dest_key.size:
-                    if not quiet:
-                        if rename:
-                            sys.stdout.write(
-                                'Skipping %s -> %s (size matches)\n' %
-                                keypath.split('/')[-1], fullpath.split('/')[-1]
-                                )
-                        else:
-                            sys.stdout.write(
-                                'Skipping %s (size matches)\n' % fullpath
-                                )
-                    copy_file = False
+                    skip_reason = ''
+                    if size_only:
+                        skip_reason = 'size matches'
+                    # Compare last modified
+                    elif parse_ts(key.last_modified) < parse_ts(dest_key.last_modified):
+                        skip_reason = 'destination more recently modified'
+                    if skip_reason != '':
+                        if not quiet:
+                            if rename:
+                                sys.stdout.write(
+                                    'Skipping %s -> %s (%s)\n' %
+                                    (keypath.split('/')[-1], fullpath.split('/')[-1], skip_reason)
+                                    )
+                            else:
+                                sys.stdout.write(
+                                    'Skipping %s (%s)\n' % (fullpath, skip_reason)
+                                    )
+                        copy_file = False
             
             if copy_file:
                 if rename:
@@ -1119,12 +1174,21 @@ def main():
                                 )
                         continue
                     elif key.size == dest_key.size:
-                        if not quiet:
-                            sys.stdout.write(
-                                'Skipping %s (size matches)\n' %
-                                fullpath.replace('_$folder$', '/')
-                                )
-                        continue
+                        if size_only:
+                            if not quiet:
+                                sys.stdout.write(
+                                    'Skipping %s (size matches)\n' %
+                                    fullpath.replace('_$folder$', '/')
+                                    )
+                            continue
+                        # Compare last modified
+                        elif parse_ts(key.last_modified) < parse_ts(dest_key.last_modified):
+                            if not quiet:
+                                sys.stdout.write(
+                                    'Skipping %s (destination more recently modified)\n' %
+                                    fullpath.replace('_$folder$', '/')
+                                    )
+                            continue
                 
                 sys.stdout.write('%s...  ' % keypath.replace('_$folder$', '/'))
                 sys.stdout.flush()
