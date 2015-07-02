@@ -121,6 +121,9 @@ Options
                         keys/files whose size is 0. Warning: S3/GS often uses
                         empty keys with special trailing characters to specify
                         directories.
+  --exclude             Exclude files matching the specified pattern.
+  --size-only           Only compare size of files in deciding what to transfer,
+                        ignoring last-modified.
   --delete              Delete extraneous files from destination dirs after
                         the transfer has finished (e.g. rsync's --delete-
                         after).
@@ -151,7 +154,6 @@ http://boto.cloudhackers.com/en/latest/boto_config_tut.html
 Known Issues and Limitations
 ================================================================================
 
-* Differences between keys/files are assumed *only* by checking the size.
 * Due to the nature of how directories work in S3/GS, some non-standard folder
   structures might not transfer correctly. Empty directories may also be
   overlooked in some cases. When in doubt, use "-n" first.
@@ -159,6 +161,10 @@ Known Issues and Limitations
   on some systems. See the "--glob" option's help text for more info.
 * At this time, the script does not take advantage of boto's "multipart"
   transfer methods. (pull requests welcome!)
+* The last-modified time on the cloud platform may really be the time uploaded.
+  Comparison is done which attempts to preserve the more recent copy (similar to
+  ``rsync --update``). You can use the ``--size-only`` option if this discrepancy
+  is problematic.
 
 
 Disclaimers and Warnings
