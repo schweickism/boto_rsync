@@ -556,8 +556,7 @@ def main():
                                     reduced_redundancy=reduced,
                                     encrypt_key=encrypt
                                     )
-                            keys[key_name]['size'] = 0
-                            keys[key_name]['modified'] = datetime.datetime.now()
+                            keys[key_name] = {'size': 0, 'modified': datetime.datetime.now()}
                             
                             # Clean stdout
                             sys.stdout.write('\n')
@@ -640,8 +639,7 @@ def main():
                                 policy=grant, reduced_redundancy=reduced,
                                 encrypt_key=encrypt
                                 )
-                        keys[key_name]['size'] = file_size
-                        keys[key_name]['modified'] = datetime.datetime.now()
+                        keys[key_name] = {'size': file_size, 'modified': datetime.datetime.now()}
                         
                         # Clean stdout
                         sys.stdout.write('\n')
